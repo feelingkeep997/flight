@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>hhh-flight 控制核心交互演示 · 混控与串级 PID</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 24px 64px;
+    font-family: "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+    background: #FAFAF8; color: #2C2C2A; line-height: 1.6;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 500; margin: 0 0 6px; }
+  .sub { font-size: 13px; color: #5F5E5A; margin: 0 0 28px; }
+  h2 { font-size: 15px; font-weight: 500; margin: 0 0 4px; }
+  .note { font-size: 12px; color: #5F5E5A; margin: 0 0 16px; }
+  section {
+    background: #fff; border: 0.5px solid rgba(0,0,0,.15); border-radius: 12px;
+    padding: 20px 22px 24px; margin-bottom: 20px;
+  }
+  .grid { display: grid; grid-template-columns: 300px 1fr; gap: 28px; align-items: start; }
+  @media (max-width: 780px) { .grid { grid-template-columns: 1fr; } }
+
+  .ctrl { margin-bottom: 14px; }
+  .ctrl label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; }
+  .ctrl label b { font-weight: 500; color: #185FA5; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: #185FA5; }
+
+  .bars { margin-top: 18px; }
+  .bar { display: grid; grid-template-columns: 54px 1fr 52px; gap: 10px; align-items: center; margin-bottom: 7px; font-size: 12px; }
+  .track { height: 16px; background: #F1EFE8; border-radius: 4px; overflow: hidden; }
+  .fill { height: 100%; background: #378ADD; width: 0%; transition: width .06s linear; }
+  .fill.sat { background: #E24B4A; }
+  .val { text-align: right; font-variant-numeric: tabular-nums; color: #444441; }
+
+  .formula {
+    margin-top: 16px; padding: 12px 14px; background: #F1EFE8;
+    border-radius: 8px; font-family: Consolas, "Courier New", monospace; font-size: 12px; line-height: 1.9;
+  }
+  .chk { font-size: 13px; display: flex; align-items: center; gap: 7px; margin-top: 14px; }
+  .chk input { accent-color: #185FA5; }
+
+  canvas { width: 100%; height: 250px; display: block; border: 0.5px solid rgba(0,0,0,.15); border-radius: 8px; background: #fff; }
+  .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+  .metric { background: #F1EFE8; border-radius: 8px; padding: 10px 12px; }
+  .metric span { display: block; font-size: 11px; color: #5F5E5A; }
+  .metric b { font-size: 17px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .legend { font-size: 12px; color: #5F5E5A; margin-top: 10px; }
+  .legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 5px; }
+  button {
+    font-family: inherit; font-size: 12px; padding: 6px 14px; margin: 12px 6px 0 0;
+    border: 0.5px solid rgba(0,0,0,.3); background: #fff; color: #2C2C2A;
+    border-radius: 6px; cursor: pointer;
+  }
+  button:hover { background: #F1EFE8; }
+  .warn { font-size: 12px; color: #993C1D; margin-top: 10px; min-height: 18px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>hhh-flight 控制核心交互演示</h1>
+  <p class="sub">对应代码：<code>components/flight/control.cpp</code>（混控与串级 PID）· <code>components/flight/estimate.cpp</code>（姿态估计）。参数默认值与固件一致。</p>
+
+  <section>
+    <h2>一、X 布局混控器</h2>
+    <p class="note">四个电机如何分配推力和三轴力矩。拖动滑块，看机身怎么倾斜。代码位置：control.cpp:190-193。</p>
+    <div class="grid">
+      <div>
+        <svg viewBox="0 0 280 280" width="100%" role="img">
+          <title>四轴 X 布局俯视演示</title>
+          <line x1="76" y1="76" x2="204" y2="204" stroke="#D3D1C7" stroke-width="4"/>
+          <line x1="204" y1="76" x2="76" y2="204" stroke="#D3D1C7" stroke-width="4"/>
+          <ellipse cx="140" cy="140" rx="26" ry="18" fill="#B4B2A9"/>
+          <polygon points="140,104 132,118 148,118" fill="#185FA5"/>
+          <circle id="mFL" cx="76"  cy="76"  r="26" fill="#B5D4F4" stroke="#185FA5" stroke-width="1"/>
+          <circle id="mFR" cx="204" cy="76"  r="26" fill="#B5D4F4" stroke="#185FA5" stroke-width="1"/>
+          <circle id="mRL" cx="76"  cy="204" r="26" fill="#B5D4F4" stroke="#185FA5" stroke-width="1"/>
+          <circle id="mRR" cx="204" cy="204" r="26" fill="#B5D4F4" stroke="#185FA5" stroke-width="1"/>
+          <text id="tFL" x="76"  y="76"  text-anchor="middle" dominant-baseline="central" font-size="13" font-family="Consolas,monospace" fill="#0C447C">0.00</text>
+          <text id="tFR" x="204" y="76"  text-anchor="middle" dominant-baseline="central" font-size="13" font-family="Consolas,monospace" fill="#0C447C">0.00</text>
+          <text id="tRL" x="76"  y="204" text-anchor="middle" dominant-baseline="central" font-size="13" font-family="Consolas,monospace" fill="#0C447C">0.00</text>
+          <text id="tRR" x="204" y="204" text-anchor="middle" dominant-baseline="central" font-size="13" font-family="Consolas,monospace" fill="#0C447C">0.00</text>
+          <text x="76"  y="76"  text-anchor="middle" font-size="9" fill="#5F5E5A" transform="translate(0,-34)">FL 逆时针</text>
+          <text x="204" y="76"  text-anchor="middle" font-size="9" fill="#5F5E5A" transform="translate(0,-34)">FR 顺时针</text>
+          <text x="76"  y="204" text-anchor="middle" font-size="9" fill="#5F5E5A" transform="translate(0,40)">RL 顺时针</text>
+          <text x="204" y="204" text-anchor="middle" font-size="9" fill="#5F5E5A" transform="translate(0,40)">RR 逆时针</text>
+        </svg>
+        <div class="legend" style="text-align:center;margin-top:4px">蓝色深 = 油门大 · 红色 = 已饱和</div>
+      </div>
+      <div>
+        <div class="ctrl"><label>推力 thrustTarget <b id="vT">0.50</b></label>
+          <input type="range" id="sT" min="0" max="1" step="0.01" value="0.5"></div>
+        <div class="ctrl"><label>横滚 torque.x（右倾为正） <b id="vX">0.00</b></label>
+          <input type="range" id="sX" min="-0.6" max="0.6" step="0.01" value="0"></div>
+        <div class="ctrl"><label>俯仰 torque.y（前倾为正） <b id="vY">0.00</b></label>
+          <input type="range" id="sY" min="-0.6" max="0.6" step="0.01" value="0"></div>
+        <div class="ctrl"><label>偏航 torque.z（右转为正） <b id="vZ">0.00</b></label>
+          <input type="range" id="sZ" min="-0.6" max="0.6" step="0.01" value="0"></div>
+
+        <div class="bars">
+          <div class="bar"><span>FL</span><div class="track"><div class="fill" id="bFL"></div></div><span class="val" id="nFL">0.00</span></div>
+          <div class="bar"><span>FR</span><div class="track"><div class="fill" id="bFR"></div></div><span class="val" id="nFR">0.00</span></div>
+          <div class="bar"><span>RL</span><div class="track"><div class="fill" id="bRL"></div></div><span class="val" id="nRL">0.00</span></div>
+          <div class="bar"><span>RR</span><div class="track"><div class="fill" id="bRR"></div></div><span class="val" id="nRR">0.00</span></div>
+        </div>
+
+        <label class="chk"><input type="checkbox" id="desat" checked> 启用 desaturate() 抗饱和（control.cpp:201）</label>
+        <div class="formula" id="fml"></div>
+        <div class="warn" id="warn"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>二、串级 PID 阶跃响应</h2>
+    <p class="note">外环姿态（ROLL_P）把角度误差变成目标角速率，内环角速率（P/I/D）把速率误差变成力矩。仿真步长 1 kHz，与固件主循环一致；含持续扰动、电机饱和与微分低通（alpha=0.2）。<b>把积分 I 调成 0，稳态误差立刻出现</b> —— 这就是内环必须带 I 的原因。</p>
+    <div class="grid">
+      <div style="grid-column:1/-1">
+        <canvas id="cv"></canvas>
+        <div class="legend">
+          <i style="background:#888780"></i>目标角度　<i style="background:#185FA5"></i>实际角度　<i style="background:#1D9E75"></i>角速率(右轴)　<i style="background:#E24B4A"></i>电机饱和区
+        </div>
+        <div class="metrics">
+          <div class="metric"><span>超调量</span><b id="mOs">—</b></div>
+          <div class="metric"><span>上升时间 (达 90%)</span><b id="mRt">—</b></div>
+          <div class="metric"><span>2 秒后稳态误差</span><b id="mSs">—</b></div>
+        </div>
+      </div>
+      <div>
+        <div class="ctrl"><label>目标倾角（度） <b id="vA">10</b></label>
+          <input type="range" id="sA" min="2" max="30" step="1" value="10"></div>
+        <div class="ctrl"><label>外环 ROLL_P <b id="vP">6.0</b></label>
+          <input type="range" id="sP" min="0" max="15" step="0.5" value="6"></div>
+        <div class="ctrl"><label>持续扰动（重心偏移 / 侧风） <b id="vD">0.010</b></label>
+          <input type="range" id="sD" min="0" max="0.05" step="0.001" value="0.01"></div>
+        <button onclick="preset('default')">恢复固件默认值</button>
+        <button onclick="preset('noI')">去掉积分 I=0</button>
+        <button onclick="preset('bigP')">外环 P 过大</button>
+      </div>
+      <div>
+        <div class="ctrl"><label>内环 PITCHRATE_P <b id="vIp">0.060</b></label>
+          <input type="range" id="sIp" min="0" max="0.2" step="0.005" value="0.06"></div>
+        <div class="ctrl"><label>内环 PITCHRATE_I <b id="vIi">0.10</b></label>
+          <input type="range" id="sIi" min="0" max="0.5" step="0.01" value="0.1"></div>
+        <div class="ctrl"><label>内环 PITCHRATE_D <b id="vId">0.0010</b></label>
+          <input type="range" id="sId" min="0" max="0.01" step="0.0005" value="0.001"></div>
+        <button onclick="preset('noD')">去掉微分 D=0</button>
+        <button onclick="preset('bigI')">积分 I 过大</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+const M = { FL: 3, FR: 2, RL: 0, RR: 1 };
+
+function desaturate(a, b, c, d) {
+  const avg = (a + b + c + d) * 0.25;
+  const maxVal = Math.max(a, b, c, d), minVal = Math.min(a, b, c, d);
+  let scale = 1;
+  if (maxVal > 1 && maxVal > avg) scale = Math.min(scale, (1 - avg) / (maxVal - avg));
+  if (minVal < 0 && avg > minVal) scale = Math.min(scale, avg / (avg - minVal));
+  if (scale < 1) return [avg + (a - avg) * scale, avg + (b - avg) * scale, avg + (c - avg) * scale, avg + (d - avg) * scale];
+  return [a, b, c, d];
+}
+
+function drawMixer() {
+  const T = +sT.value, x = +sX.value, y = +sY.value, z = +sZ.value;
+  vT.textContent = T.toFixed(2); vX.textContent = x.toFixed(2);
+  vY.textContent = y.toFixed(2); vZ.textContent = z.toFixed(2);
+
+  let m = new Array(4);
+  m[M.FL] = T + x - y + z;
+  m[M.FR] = T - x - y - z;
+  m[M.RL] = T + x + y - z;
+  m[M.RR] = T - x + y + z;
+
+  const raw = m.slice();
+  if (desat.checked) {
+    const d = desaturate(m[M.FL], m[M.FR], m[M.RL], m[M.RR]);
+    const out = new Array(4);
+    out[M.FL] = d[0]; out[M.FR] = d[1]; out[M.RL] = d[2]; out[M.RR] = d[3];
+    m = out.map(v => Math.min(1, Math.max(0, v)));
+  } else {
+    m = m.map(v => Math.min(1, Math.max(0, v)));
+  }
+
+  const order = ['FL', 'FR', 'RL', 'RR'];
+  const sat = raw.some(v => v > 1.0001 || v < -0.0001);
+  order.forEach((k, i) => {
+    const idx = M[k], v = m[idx], isSat = raw[idx] > 1.0001 || raw[idx] < -0.0001;
+    document.getElementById('m' + k).setAttribute('fill', isSat ? '#F7C1C1' : `rgba(53,138,221,${0.12 + v * 0.8})`);
+    document.getElementById('m' + k).setAttribute('stroke', isSat ? '#A32D2D' : '#185FA5');
+    document.getElementById('t' + k).textContent = v.toFixed(2);
+    document.getElementById('t' + k).setAttribute('fill', isSat ? '#791F1F' : '#0C447C');
+    const bar = document.getElementById('b' + k);
+    bar.style.width = (v * 100) + '%';
+    bar.classList.toggle('sat', isSat);
+    document.getElementById('n' + k).textContent = v.toFixed(2);
+  });
+
+  fml.innerHTML =
+    `FL = T + x − y + z = ${T.toFixed(2)} ${sgn(x)} ${sgn(y, '-')} ${sgn(z)} = ${m[M.FL].toFixed(2)}<br>` +
+    `FR = T − x − y − z = ${T.toFixed(2)} ${sgn(x, '-')} ${sgn(y, '-')} ${sgn(z, '-')} = ${m[M.FR].toFixed(2)}<br>` +
+    `RL = T + x + y − z = ${T.toFixed(2)} ${sgn(x)} ${sgn(y)} ${sgn(z, '-')} = ${m[M.RL].toFixed(2)}<br>` +
+    `RR = T − x + y + z = ${T.toFixed(2)} ${sgn(x, '-')} ${sgn(y)} ${sgn(z)} = ${m[M.RR].toFixed(2)}`;
+
+  warn.textContent = sat
+    ? (desat.checked ? '有电机越界，已启用抗饱和：四路绕平均值同比压缩，总推力不变、只牺牲机动性。'
+                     : '有电机越界且未抗饱和：直接截断导致推力比例被破坏，机身会往一边歪。')
+    : '';
+}
+function sgn(v, force) {
+  const s = force === '-' ? -v : v;
+  return (s >= 0 ? '+ ' : '− ') + Math.abs(v).toFixed(2);
+}
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+function sizeCanvas() {
+  const r = window.devicePixelRatio || 1;
+  cv.width = cv.clientWidth * r; cv.height = 250 * r;
+  ctx.setTransform(r, 0, 0, r, 0, 0);
+}
+
+function simulate() {
+  const targetDeg = +sA.value, P = +sP.value;
+  const ip = +sIp.value, ii = +sIi.value, id = +sId.value;
+  const target = targetDeg * Math.PI / 180;
+  const dist = +sD.value;
+  const dt = 0.001, steps = 2000, K = 80, damp = 0.4, hover = 0.5;
+
+  let angle = 0, rate = 0, integral = 0, prevRateErr = NaN, dLpf = 0;
+  const ang = [], rat = [], satFlag = [];
+  let rise = -1, peak = 0;
+
+  for (let i = 0; i < steps; i++) {
+    const rateTarget = P * (target - angle);
+    const rateErr = rateTarget - rate;
+    if (!isNaN(prevRateErr)) {
+      integral += rateErr * dt;
+      dLpf = dLpf + 0.2 * ((rateErr - prevRateErr) / dt - dLpf);
+    }
+    prevRateErr = rateErr;
+    integral = Math.max(-0.3, Math.min(0.3, integral));
+
+    let torque = ip * rateErr + ii * integral + id * dLpf;
+    const s = Math.abs(torque) + hover > 1;
+    const tEff = Math.max(-(1 - hover), Math.min(1 - hover, torque));
+    const accel = (tEff - dist) * K - damp * rate;
+    rate += accel * dt;
+    angle += rate * dt;
+
+    ang.push(angle); rat.push(rate); satFlag.push(s);
+    if (rise < 0 && angle >= target * 0.9) rise = i * dt;
+    if (angle > peak) peak = angle;
+  }
+
+  const overshoot = target !== 0 ? (peak - target) / target * 100 : 0;
+  const ssErr = target - ang[steps - 1];
+  mOs.textContent = (overshoot > 0.5 ? overshoot.toFixed(1) + '%' : '几乎无');
+  mRt.textContent = (rise >= 0 ? (rise * 1000).toFixed(0) + ' ms' : '未达到');
+  mSs.textContent = (Math.abs(ssErr) * 180 / Math.PI).toFixed(3) + '°';
+
+  draw(ang, rat, satFlag, target);
+}
+
+function draw(ang, rat, satFlag, target) {
+  const W = cv.clientWidth, H = 250;
+  const L = 46, R = 46, Tp = 14, Bt = 26;
+  const pw = W - L - R, ph = H - Tp - Bt;
+  ctx.clearRect(0, 0, W, H);
+
+  let maxA = Math.max(target * 1.6, 0.02);
+  ang.forEach(v => { if (Math.abs(v) > maxA) maxA = Math.abs(v) * 1.1; });
+  let maxR = 0.1; rat.forEach(v => { if (Math.abs(v) > maxR) maxR = Math.abs(v) * 1.1; });
+
+  const yA = v => Tp + ph / 2 - (v / maxA) * (ph / 2);
+  const yR = v => Tp + ph / 2 - (v / maxR) * (ph / 2);
+  const xT = i => L + (i / ang.length) * pw;
+
+  ctx.strokeStyle = '#F1EFE8'; ctx.lineWidth = 1;
+  for (let g = 0; g <= 4; g++) {
+    const y = Tp + (ph / 4) * g;
+    ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(L + pw, y); ctx.stroke();
+  }
+
+  ctx.fillStyle = '#FCEBEB';
+  let runStart = -1;
+  for (let i = 0; i < satFlag.length; i++) {
+    if (satFlag[i] && runStart < 0) runStart = i;
+    if ((!satFlag[i] || i === satFlag.length - 1) && runStart >= 0) {
+      ctx.fillRect(xT(runStart), Tp, xT(i) - xT(runStart), ph);
+      runStart = -1;
+    }
+  }
+
+  ctx.strokeStyle = '#888780'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(L, yA(target)); ctx.lineTo(L + pw, yA(target)); ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.strokeStyle = '#1D9E75'; ctx.lineWidth = 1.2; ctx.beginPath();
+  rat.forEach((v, i) => i ? ctx.lineTo(xT(i), yR(v)) : ctx.moveTo(xT(i), yR(v)));
+  ctx.stroke();
+
+  ctx.strokeStyle = '#185FA5'; ctx.lineWidth = 2; ctx.beginPath();
+  ang.forEach((v, i) => i ? ctx.lineTo(xT(i), yA(v)) : ctx.moveTo(xT(i), yA(v)));
+  ctx.stroke();
+
+  ctx.fillStyle = '#5F5E5A'; ctx.font = '11px system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText((maxA * 180 / Math.PI).toFixed(0) + '°', L - 6, Tp + 8);
+  ctx.fillText('0°', L - 6, Tp + ph / 2 + 4);
+  ctx.fillText('-' + (maxA * 180 / Math.PI).toFixed(0) + '°', L - 6, Tp + ph - 2);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#1D9E75';
+  ctx.fillText((maxR).toFixed(1) + ' rad/s', L + pw + 6, Tp + 8);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#5F5E5A';
+  ctx.fillText('0', L, H - 8);
+  ctx.fillText('1.0 s', L + pw / 2, H - 8);
+  ctx.fillText('2.0 s', L + pw, H - 8);
+}
+
+function preset(k) {
+  const set = (id, v) => { document.getElementById(id).value = v; };
+  if (k === 'default') { set('sP', 6); set('sIp', 0.06); set('sIi', 0.1); set('sId', 0.001); set('sD', 0.01); }
+  if (k === 'noI')  { set('sIi', 0); }
+  if (k === 'noD')  { set('sId', 0); }
+  if (k === 'bigP') { set('sP', 14); }
+  if (k === 'bigI') { set('sIi', 0.45); }
+  refresh();
+}
+function refresh() {
+  vA.textContent = sA.value;
+  vP.textContent = (+sP.value).toFixed(1);
+  vIp.textContent = (+sIp.value).toFixed(3);
+  vIi.textContent = (+sIi.value).toFixed(2);
+  vId.textContent = (+sId.value).toFixed(4);
+  vD.textContent = (+sD.value).toFixed(3);
+  simulate();
+}
+
+['sT','sX','sY','sZ','desat'].forEach(id => document.getElementById(id).addEventListener('input', drawMixer));
+['sA','sP','sIp','sIi','sId','sD'].forEach(id => document.getElementById(id).addEventListener('input', refresh));
+window.addEventListener('resize', () => { sizeCanvas(); refresh(); });
+sizeCanvas();
+drawMixer();
+refresh();
+</script>
+</body>
+</html>

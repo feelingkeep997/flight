@@ -1,0 +1,29 @@
+# hhh-flight sdkconfig defaults
+# Target: ESP32 (classic, ESP32-D0WD, no external PSRAM)
+
+# Target chip
+CONFIG_IDF_TARGET="esp32"
+
+# FreeRTOS
+CONFIG_FREERTOS_HZ=1000
+
+# Partition table - custom for parameters/log storage
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# WiFi
+CONFIG_ESP_WIFI_ENABLED=y
+
+# LWIP
+CONFIG_LWIP_MAX_SOCKETS=16
+
+# NVS
+CONFIG_NVS_ENCRYPTION=n
+
+# Flash size - 4MB (default ESP32 module)
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# PSRAM - MUST stay disabled on plain ESP32-D0WD (no external PSRAM chip).
+# Enabling it causes "Failed to init external RAM!" -> abort() -> boot loop.
+# CONFIG_SPIRAM is not set
